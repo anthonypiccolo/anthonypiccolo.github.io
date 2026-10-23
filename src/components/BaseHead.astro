@@ -10,7 +10,9 @@ interface Props {
   type?: 'website' | 'article';
 }
 
-const { title, description = SITE_DESCRIPTION, image = '/assets/anthonypiccolo_bio.jpg', type = 'website' } = Astro.props;
+const { title, description = SITE_DESCRIPTION, image, type = 'website' } = Astro.props;
+// Posts with their own image get the big card; everything else shows the bio photo as a small thumbnail.
+const shareImage = image ?? '/assets/anthonypiccolo_bio.jpg';
 const fullTitle = title ? `${title} — ${SITE_TITLE}` : SITE_TITLE;
 const canonicalURL = new URL(Astro.url.pathname, Astro.site);
 ---
@@ -35,8 +37,8 @@ const canonicalURL = new URL(Astro.url.pathname, Astro.site);
 <meta property="og:url" content={canonicalURL} />
 <meta property="og:title" content={title ?? SITE_TITLE} />
 <meta property="og:description" content={description} />
-<meta property="og:image" content={new URL(image, Astro.site)} />
-<meta name="twitter:card" content="summary" />
+<meta property="og:image" content={new URL(shareImage, Astro.site)} />
+<meta name="twitter:card" content={image ? 'summary_large_image' : 'summary'} />
 <meta name="twitter:site" content="@anthonypiccolo" />
 
 {import.meta.env.PROD && (

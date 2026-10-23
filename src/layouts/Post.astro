@@ -7,10 +7,10 @@ interface Props {
 }
 
 const { post } = Astro.props;
-const { title, date, category, description, image } = post.data;
+const { title, date, category, description, image, ogImage } = post.data;
 ---
 
-<Base title={title} description={description} image={image} type="article">
+<Base title={title} description={description} image={ogImage ?? image} type="article">
   <article class="post">
     <header class="post-header">
       <p class="meta">

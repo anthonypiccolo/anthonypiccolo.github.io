@@ -13,6 +13,8 @@ const posts = defineCollection({
     description: z.string().optional(),
     // Path to an image in public/, e.g. /assets/hero.png
     image: z.string().optional(),
+    // Social share card only (not shown on the page). Falls back to `image`, then the bio photo.
+    ogImage: z.string().optional(),
     draft: z.boolean().default(false),
   }),
 });
