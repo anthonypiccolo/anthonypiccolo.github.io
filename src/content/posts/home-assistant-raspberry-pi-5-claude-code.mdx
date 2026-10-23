@@ -17,7 +17,7 @@ The thing that finally tipped me over was cooling. I wanted some more complex co
 
 I landed on [Home Assistant](https://www.home-assistant.io/), running on a Raspberry Pi 5. That one Pi now runs the whole house: Zigbee window sensors, the cooling logic, two security cameras with local AI object detection (no subscription), air quality monitoring, notifications to our phones, network-wide ad blocking, and secure remote access when we're out.
 
-The other big part of this story is how I built it. I didn't spend weeks reading forum threads and hand-writing YAML. Most of this was built and is now maintained by [Claude Code](https://claude.com/claude-code), talking to Home Assistant through an MCP server called [ha-mcp](https://github.com/homeassistant-ai/ha-mcp) and to the Pi over SSH. I'll get into that properly further down, because it's changed how I think about this kind of project.
+How I built this is really the key point of this article. I didn't spend weeks reading forum threads and hand-writing YAML. Most of this was built and is now maintained by [Claude Code](https://claude.com/claude-code), talking to Home Assistant through an MCP server called [ha-mcp](https://github.com/homeassistant-ai/ha-mcp) and to the Pi over SSH. I'll get into that properly further down, because it's changed what is possible.
 
 This is a long one. I've tried to include all the details from when I started working on this project.
 
