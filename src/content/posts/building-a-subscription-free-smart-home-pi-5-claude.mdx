@@ -53,7 +53,7 @@ The full list of hardware is pretty short:
 
 A few notes on the choices.
 
-**Why a Pi 5 and not a mini PC?** Honestly, I've always wanted to play around with one and thought it was suitable for my use case. A N100 mini PC would give you more headroom and an x86 CPU, which some things still prefer. But the Pi 5 with 8GB has turned out to be fine, mainly because the heavy lifting for the cameras is handed off to the Coral. Right now the whole stack is using about 3.6GB of RAM, and Frigate (the biggest consumer by a long way) sits at around 18% CPU.
+**Why a Pi 5 and not a mini PC?** Honestly, I've always wanted to play around with one and thought it was suitable for my use case. An N100 mini PC would give you more headroom and an x86 CPU, which some things still prefer. But the Pi 5 with 8GB has turned out to be fine, mainly because the heavy lifting for the cameras is handed off to the Coral. Right now the whole stack is using about 3.6GB of RAM, and Frigate (the biggest consumer by a long way) sits at around 18% CPU.
 
 **Boot from NVMe, not an SD card.** Home Assistant writes to its database constantly, Frigate writes video clips, and SD cards don't love that. The Pi 5's PCIe connector means you can put an NVMe HAT underneath and boot straight off an SSD. I'd consider this mandatory for anything you want to leave running for years.
 
@@ -286,7 +286,7 @@ I also pull in outdoor data for comparison. The [EPA Victoria air quality integr
 
 Some of the most-used automations are the simplest:
 
-- **Coffee.** The coffee machine is on a TP-Link Kasa smart plug, every morning Home Assistant turns it on so it's warmed up by the time I get to it. It's a one-trigger, one-action automation..
+- **Coffee.** The coffee machine is on a TP-Link Kasa smart plug, every morning Home Assistant turns it on so it's warmed up by the time I get to it. It's a one-trigger, one-action automation.
 - **TV and media.** The LG OLED (webOS) and the Nvidia Shield (Android TV) show up as media players.
 - **Weather.** The BOM integration feeds a forecast card on the home dashboard.
 
@@ -463,7 +463,7 @@ For notifications, the snapshot-then-GIF flow, the zone tuning in Frigate, and t
 
 Even the diagram at the top of this post came out of the same workflow. Claude pulled the actual configuration off the Pi and drew it, so it reflects what's really running rather than what I think is running.
 
-None of this would've been possible unless I spent countless hours to get to this point.
+None of this would've been possible without spending countless hours to get to this point.
 
 ### The bits to be careful with
 
