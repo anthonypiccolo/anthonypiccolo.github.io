@@ -1,0 +1,17 @@
+{
+  // Treat MDX posts as Markdown so they get highlighting and the settings below.
+  "files.associations": {
+    "*.mdx": "markdown"
+  },
+  "[markdown]": {
+    // Wrap long lines at a comfortable reading width instead of scrolling sideways.
+    "editor.wordWrap": "bounded",
+    "editor.wordWrapColumn": 80,
+    "editor.wrappingIndent": "same",
+    "editor.lineHeight": 1.7,
+    "editor.minimap.enabled": false,
+    "editor.lineNumbers": "off",
+    "editor.quickSuggestions": { "other": false, "comments": false, "strings": false }
+  },
+  "zenMode.centerLayout": true
+}

@@ -1,0 +1,498 @@
+---
+title: "Building a subscription-free smart home on a Raspberry Pi 5 (with a lot of help from Claude)"
+date: 2026-10-23
+category: Tech
+description: "Home Assistant, Zigbee2MQTT, Frigate on a Coral TPU, Pi-hole and a Cloudflare Tunnel, all on one Raspberry Pi 5, and how Claude Code and ha-mcp did most of the heavy lifting."
+---
+import HomeLabDiagram from '../../components/HomeLabDiagram.astro';
+
+For the longest time I've wanted to move my home automation away from subscription services and over to something self-hosted that I actually control. Our homes are full of connected devices, and nearly every one of them wants its own app, its own account, and increasingly its own monthly subscription just to do the thing you bought it to do.
+
+It gets more annoying when you run into devices that don't work with whatever ecosystem you've bought into, whether that's Amazon's Alexa, Google Home or Apple Home. What's frustrated me more over the last few years is watching big tech companies quietly drop support and updates for products as they chase more lucrative revenue elsewhere.
+
+I was firmly in the Google Home ecosystem, paying around $15/month -- mostly for a couple of Google Nest cameras that were getting more and more annoying to use. I also had a Google Home speaker, and with the push towards AI, Google seemed to abruptly lose interest in Google Assistant. The quality noticeably declined over time.
+
+The thing that finally tipped me over was cooling. I wanted some more complex conditional rules around the split system in our bedroom. Keep the room at a set temperature, but don't turn on when a window is open, use different targets during the day and overnight, and don't flick the compressor on and off every few minutes either. None of that is possible in the Mitsubishi app, and stitching it together in Google Home wasn't really possible either. That's what led me to explore self-hosted options and eventually build out my own home automation setup.
+
+I landed on [Home Assistant](https://www.home-assistant.io/), running on a Raspberry Pi 5. That one Pi now runs the whole house: Zigbee window sensors, the cooling logic, two security cameras with local AI object detection (no subscription), air quality monitoring, notifications to our phones, network-wide ad blocking, and secure remote access when we're out.
+
+The other big part of this story is how I built it. I didn't spend weeks reading forum threads and hand-writing YAML. Most of this was built and is now maintained by [Claude Code](https://claude.com/claude-code), talking to Home Assistant through an MCP server called [ha-mcp](https://github.com/homeassistant-ai/ha-mcp) and to the Pi over SSH. I'll get into that properly further down, because it's changed how I think about this kind of project.
+
+This is a long one. I've tried to include all the details from when I started working on this project.
+
+## The architecture
+
+Here is what I'm essentially running today.
+
+<HomeLabDiagram />
+
+Broadly there are three layers:
+
+1. **Devices in the house.** Zigbee sensors on the windows, two Reolink cameras, an air quality monitor, the split system, and a few Wi-Fi things like a smart plug and the TV.
+2. **The Raspberry Pi 5.** Every service is its own Docker container. Home Assistant sits in the middle, with Mosquitto, Zigbee2MQTT and Frigate feeding it, plus a handful of supporting services.
+3. **Clients and cloud.** Our phones, my Mac running Claude Code, and the small number of external services the setup still leans on.
+
+The rest of this post walks through each piece.
+
+## The hardware
+
+The full list of hardware is pretty short:
+
+| Device | What it does |
+| --- | --- |
+| Raspberry Pi 5 (8GB) | Runs everything |
+| NVMe SSD (256GB) | Boot and storage. No SD card |
+| Sonoff Zigbee 3.0 USB Dongle Plus (ZBDongle-P) | Zigbee coordinator, plugged straight into the Pi |
+| Google Coral USB Accelerator | Edge TPU for camera object detection |
+| Aqara Door and Window Sensor T1 ×3 | Two bedroom windows and the bathroom louvres |
+| Reolink Video Doorbell | Front door camera and doorbell |
+| Reolink Lumus | Front garden camera |
+| Apollo Automation AIR-1 | CO₂, PM2.5, VOC, temperature and humidity |
+| Mitsubishi Electric split system | Bedroom cooling, via its Wi-Fi adapter |
+| TP-Link Kasa KP105 | Smart plug on the coffee machine |
+
+A few notes on the choices.
+
+**Why a Pi 5 and not a mini PC?** Honestly, I've always wanted to play around with one and thought it was suitable for my use case. A N100 mini PC would give you more headroom and an x86 CPU, which some things still prefer. But the Pi 5 with 8GB has turned out to be fine, mainly because the heavy lifting for the cameras is handed off to the Coral. Right now the whole stack is using about 3.6GB of RAM, and Frigate (the biggest consumer by a long way) sits at around 18% CPU.
+
+**Boot from NVMe, not an SD card.** Home Assistant writes to its database constantly, Frigate writes video clips, and SD cards don't love that. The Pi 5's PCIe connector means you can put an NVMe HAT underneath and boot straight off an SSD. I'd consider this mandatory for anything you want to leave running for years.
+
+**USB placement matters.** The Coral goes in a USB 3 (blue) port. The Zigbee dongle goes in USB 2, ideally on a short extension lead away from the Pi. USB 3 ports and SSDs are notorious for throwing out 2.4GHz interference, which is exactly where Zigbee lives. I haven't had any trouble with mine though and mine isn't on an extension lead.
+
+## Home Assistant in a container (not HAOS)
+
+There are a few ways to install Home Assistant:
+
+- **Home Assistant OS (HAOS)** is a full operating system. You flash it onto the device and it takes over the whole machine. You get the Supervisor, one-click add-ons, built-in backups and updates from the UI.
+- **Home Assistant Container** is just Home Assistant Core in a Docker container, running on whatever Linux you like.
+
+I'm running **Container**. The Pi runs standard Raspberry Pi OS (Debian), with Docker on top, and Home Assistant is one container alongside everything else.
+
+The trade-off is that you lose the add-on store. On HAOS, Mosquitto and Zigbee2MQTT are add-ons you install with a click. On Container, each one is its own Docker container that you set up yourself. That used to be a reasonable argument for HAOS if you weren't comfortable with Docker. As I'll explain later, it matters a lot less when an AI agent is doing the Docker work for you, and in exchange I get a normal Linux box I can run anything on: Pi-hole, monitoring tools, whatever else I want to use my Pi for in the future.
+
+Every service is defined in a Docker Compose file under `/opt/stacks/<name>/compose.yaml`. Home Assistant's looks like this:
+
+```yaml
+services:
+  homeassistant:
+    image: ghcr.io/home-assistant/home-assistant:2026.10
+    container_name: homeassistant
+    restart: unless-stopped
+    privileged: true
+    network_mode: host
+    volumes:
+      - /srv/docker/homeassistant:/config
+      - /etc/localtime:/etc/localtime:ro
+    mem_limit: 2g
+    memswap_limit: 2g
+```
+
+A few things worth calling out:
+
+- `network_mode: host` lets Home Assistant discover devices on the network (Chromecasts, the TV, ESPHome devices) using mDNS and other broadcast protocols. Discovery gets painful inside Docker's bridge network.
+- `mem_limit` caps how much RAM the container can use. This came out of an outage, which I'll cover later.
+- The image is pinned to the monthly tag (`2026.10`) rather than `stable`. Home Assistant puts out a big release every month, and occasionally one changes something you rely on. With the monthly tag, Watchtower (more on that below) picks up that month's bug-fix releases automatically, but the jump to next month's release only happens when I change the tag myself.
+
+## Zigbee: the dongle, Zigbee2MQTT and Mosquitto
+
+Most cheap smart home sensors talk either Wi-Fi or Zigbee. For anything battery-powered, I prefer Zigbee. It's a low-power mesh protocol, so sensors run for a year or more on a coin cell, and none of it touches the internet. A Zigbee window sensor has no cloud account and no app, and it can't phone home, because it can't speak IP at all.
+
+To talk Zigbee you need a coordinator, which here is the **Sonoff ZBDongle-P** plugged into the Pi. It's a cheap USB stick built on a Texas Instruments CC2652P chip and it has really good support. It beats having a million WiFi enabled devices.
+
+There are two main ways to use a Zigbee dongle with Home Assistant:
+
+- **ZHA** (Zigbee Home Automation), built into Home Assistant itself.
+- **Zigbee2MQTT**, a separate service that drives the dongle and publishes everything over MQTT.
+
+I started on ZHA and moved to Zigbee2MQTT. ZHA is simpler, but Zigbee2MQTT supports more devices, exposes more of each device's settings, and has a really nice web UI for pairing and checking on the mesh. It also keeps Zigbee separate from Home Assistant, so restarting Home Assistant doesn't restart the Zigbee network.
+
+The data flow looks like this:
+
+```text
+Aqara sensor ──Zigbee──▶ Sonoff dongle ──USB──▶ Zigbee2MQTT ──MQTT──▶ Mosquitto ──MQTT──▶ Home Assistant
+```
+
+**Mosquitto** is the MQTT broker. MQTT is a lightweight publish/subscribe protocol: devices publish messages to topics (like `zigbee2mqtt/West Bedroom Window`), and anything interested subscribes to those topics. Mosquitto is the post office in the middle. It's tiny, using about 14MB of RAM.
+
+Zigbee2MQTT publishes discovery messages, so Home Assistant creates the entities automatically. Pair a sensor in the Zigbee2MQTT UI and a few seconds later it shows up in Home Assistant as `binary_sensor.west_bedroom_window`, with battery level, signal quality and the rest. Frigate also publishes its events to Mosquitto, so the broker ends up being a shared bus for the whole house.
+
+The Zigbee2MQTT compose file passes the dongle through to the container:
+
+```yaml
+services:
+  zigbee2mqtt:
+    image: koenkk/zigbee2mqtt
+    container_name: zigbee2mqtt
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - /home/anthony/zigbee2mqtt/data:/app/data
+      - /run/udev:/run/udev:ro
+    devices:
+      - /dev/ttyUSB0:/dev/ttyUSB0
+    mem_limit: 512m
+```
+
+The dongle runs on Zigbee channel 11. Channel choice matters because Zigbee and 2.4GHz Wi-Fi share the same spectrum, so it's worth picking a Zigbee channel that doesn't overlap your Wi-Fi.
+
+## The window sensors
+
+The sensors that started all of this are cheap **Aqara Door and Window Sensor T1s**. There are three: one on each of the two bedroom windows, and one on the bathroom's louvre windows.
+
+Each one is two pieces, a magnet and a sensor, mounted side by side. Open the window, the magnet moves away and the sensor reports `open`. They're tiny, run for ages on a coin cell, and with Zigbee2MQTT they report instantly. In Home Assistant they show up as simple open/closed sensors (`binary_sensor.south_bedroom_window` and so on), each with its battery level alongside.
+
+That's all the cooling logic needs to know: is any window open? It doesn't care which window it is or how far it's open.
+
+## The cooling automation (why I started all this)
+
+The split system in our bedroom is a Mitsubishi Electric unit with Mitsubishi's Wi-Fi adapter. It shows up in Home Assistant through the [MELView integration](https://github.com/jz-v/ha-melview), installed via [HACS](https://hacs.xyz/) (the Home Assistant Community Store), as a `climate.bedroom_split_system` entity plus a temperature sensor read from the unit itself.
+
+What I wanted was:
+
+- **During the day (9am–10pm):** if the room hits 22.5°C, cool to 22°C with the fan on auto. Turn off once it's back down to 22°C.
+- **Overnight (10pm–9am):** if the room hits 18.5°C, cool to 18°C with the fan on low, so it stays quiet. Turn off at 18°C.
+- **If any window opens, at any time:** turn it off immediately. There's no point cooling anymore.
+- **Don't short-cycle.** Once it's changed state, leave it alone for at least 15 minutes before changing it again.
+
+That half-degree gap between the "on" threshold and the "off" threshold is **hysteresis**. Without it, a thermostat sitting right at 22.0°C would flick on and off every time the reading wobbled by 0.1 of a degree. The 15-minute minimum cycle is a second layer of protection on top. Compressors don't like being started and stopped constantly, at least that's what I've read. I'm also considering changing the minimum cycle to around 30 minutes, but haven't tested this just yet.
+
+All of this lives in a single automation with a set of triggers: temperature crossing any of the four thresholds, the 9am and 10pm changeovers, any of the three windows opening, and a check every two minutes as a safety net. Each run works out a few variables up front:
+
+```yaml
+- variables:
+    is_day: >
+      {{ now().strftime('%H:%M:%S') >= '09:00:00'
+         and now().strftime('%H:%M:%S') < '22:00:00' }}
+    windows_closed: >
+      {{ is_state('binary_sensor.south_bedroom_window','off')
+         and is_state('binary_sensor.west_bedrooom_window','off')
+         and is_state('binary_sensor.east_bathroom_window','off') }}
+    temp_now: "{{ states('sensor.bedroom_split_system_current_temperature') | float(-999) }}"
+    climate_is_off: "{{ is_state('climate.bedroom_split_system','off') }}"
+    mins_since_state_change: >
+      {{ (as_timestamp(now())
+          - as_timestamp(states.climate.bedroom_split_system.last_changed, 0)) / 60 }}
+```
+
+Then a `choose` block works through the cases in priority order. A window opening always wins and turns the unit off straight away, with no minimum cycle check. After that it's the day and night on/off rules, each gated on `windows_closed` and `mins_since_state_change >= 15`. There's also a rule that switches setpoint and fan speed at the 9am and 10pm changeovers if the unit is already running.
+
+MELView is Mitsubishi's cloud, so if Mitsubishi's servers go down, or my internet does, Home Assistant can't talk to the aircon. The logic is all local, but the last hop isn't. The fix would be a local controller like an ESP32 on the unit's CN105 connector running ESPHome, but I haven't bothered to do this yet.
+
+## Cameras: Frigate, a Coral TPU and two Reolinks (no subscription)
+
+This allowed me to get off Google Home and the subsequent subscription.
+
+### The cameras
+
+I replaced the Nest cameras with two Reolinks:
+
+- A **Reolink Video Doorbell** at the front door.
+- A **Reolink Lumus** watching the front garden.
+
+Reolink is popular in the self-hosting world for a simple reason: their cameras expose standard **RTSP** streams on the local network, with no cloud account required. Each camera offers a high-resolution main stream and a low-resolution sub stream.
+
+### Frigate
+
+[Frigate](https://frigate.video/) is an open-source NVR (network video recorder) built around real-time object detection. Instead of recording 24/7 and alerting on every leaf that blows past, it runs motion detection first, and then runs an AI model only on the regions where something moved, to work out whether it's a person, a car, a dog or a cat.
+
+My setup (Frigate 0.17) works like this:
+
+1. **go2rtc** (bundled with Frigate) connects to each camera once and re-streams it locally. Cameras generally don't cope well with lots of simultaneous connections, so everything else (Frigate's detector, its recorder, the Home Assistant dashboard) pulls from go2rtc instead of the camera.
+2. **Detection runs on the sub stream** at 5 frames per second: 640×360 for the garden and 720×720 for the doorbell (doorbells have a squarer image). Running detection on a 4K stream would be pointless and expensive.
+3. **Recording uses the main stream**, so the saved clips are full quality.
+4. **Only events are kept.** I have continuous recording on the cameras and their local storage, but for Frigate, clips of alerts and detections, plus snapshots, are kept for 14 days and then deleted automatically. That currently comes to about 17GB on the SSD.
+
+### The Coral TPU
+
+Object detection is the expensive bit. Running it on the Pi's CPU would work, slowly, and would chew most of the CPU doing it. The **Google Coral USB Accelerator** is a small USB stick with an Edge TPU, a chip built for exactly this kind of inference.
+
+Frigate's config for it is three lines:
+
+```yaml
+detectors:
+  coral:
+    type: edgetpu
+    device: usb
+```
+
+With the Coral, inference takes about **8.5 milliseconds per frame**. Both cameras running at 5fps barely register, and the whole Frigate container sits at around 18% CPU on the Pi. The Coral is, to be fair, ageing hardware at this point, and Frigate now supports other detectors. But on a Pi it's still the easiest way to get fast, local, low-power detection.
+
+### Zones: cutting out the noise
+
+The front garden camera can see the footpath and the street, and I don't need a notification every time someone walks their dog past.
+
+Frigate handles this with **zones**, polygons drawn over the camera image:
+
+- On the garden camera there's a `house` zone covering the path and the area near the house, and a `car` zone over where the car is parked (with a 30-second loitering time, so someone just walking past doesn't count).
+- On the doorbell there's an `at_door` zone with a seven-second loitering time.
+- **Alerts only fire when an object is inside the required zone.** Everything else still gets logged as a detection I can scroll back through, but it doesn't buzz anyone's phone.
+
+There's also a mask on the doorbell camera that ignores cars, since it can see parked cars across the street and would otherwise flag them all day.
+
+### Getting it into Home Assistant
+
+The [Frigate integration](https://github.com/blakeblackshear/frigate-hass-integration) (via HACS) brings each camera into Home Assistant as a camera entity, along with occupancy sensors, switches to turn detection on and off, and access to clips and snapshots. The [Reolink integration](https://www.home-assistant.io/integrations/reolink/) runs alongside it and talks to the cameras directly, which gives me the doorbell button press and the cameras' own onboard person detection.
+
+Having both turns out to be useful. The cameras' onboard AI is very fast for "a person just appeared", while Frigate is more accurate and handles the zones, the clips and the history.
+
+## Notifications for everyone in the house
+
+Everyone in the house has the Home Assistant Companion app on their phone, and each phone registers itself with Home Assistant as a notification target. Notifications go from Home Assistant through the [Home Assistant push relay](https://companion.home-assistant.io/docs/notifications/notification-details) to Apple's push service. The relay is free and doesn't need a Nabu Casa subscription.
+
+What currently pings our phones:
+
+**Someone presses the doorbell.** Both phones get a 🔔 notification with a snapshot from the doorbell camera attached.
+
+**Frigate sees a person in a zone.** This uses SgtBatten's excellent [Frigate notification blueprint](https://github.com/SgtBatten/HA_blueprints). A blueprint is a reusable automation template, so you fill in a form instead of writing YAML. There's one instance per person in the house. It only fires for `person` objects at `alert` severity (which, given the zone setup above, means someone's actually at the house). It sends a snapshot straight away and updates the notification with the video clip once Frigate has finished recording it. Tapping the notification opens the cameras dashboard.
+
+**The cameras' onboard AI sees a person.** This is the fast path. The moment the camera itself flags a person, Home Assistant sends a snapshot. In parallel it records eight seconds of video (including four seconds before the trigger), runs it through `ffmpeg` to make a sped-up looping GIF, and then replaces the notification with the animated version. A moving image shows you so much more than a still: whether it's the postie, a delivery driver or someone hanging around.
+
+```yaml
+shell_command:
+  gif_front_garden: >-
+    ffmpeg -y -i /config/www/motion/front_garden.mp4
+    -filter_complex 'setpts=PTS/4,fps=12,scale=480:-1:flags=lanczos,split[a][b];[a]palettegen[p];[b][p]paletteuse'
+    -loop 0 /config/www/motion/front_garden.gif
+```
+
+One gotcha: the image in a phone notification has to be reachable by the phone, which might be on 5G and not on the home network. So the snapshots and GIFs are saved into Home Assistant's `www` folder and the notification points at the public URL (through the Cloudflare Tunnel, covered below) rather than a local address.
+
+**A self-healing fix.** For a while the Frigate detect switches in Home Assistant would occasionally flip themselves off, which silently killed detection and every notification that depended on it. I'd only find out when someone rang the doorbell and nobody got a ping. Rather than chase it indefinitely, there's now a small automation that watches those switches and turns them straight back on if they go off, and also re-enables them 45 seconds after Home Assistant starts.
+
+## Air quality: the Apollo AIR-1
+
+The other device I've added is an [Apollo Automation AIR-1](https://apolloautomation.com/products/air-1), which sits in the lounge room. It's a small air quality monitor packed with sensors:
+
+- A Sensirion **SCD40** for **CO₂**
+- A Sensirion **SEN55** for **particulate matter** (PM1, PM2.5, PM4, PM10), **VOCs**, NOx, temperature and humidity
+- An RGB LED on the front
+
+It runs [ESPHome](https://esphome.io/), open-source firmware for ESP32 devices that Home Assistant talks to natively over the local network. No cloud and no app. Plug it in, Home Assistant discovers it, done.
+
+The automations:
+
+- **High CO₂:** above 1,000ppm for 10 minutes. I get a notification and the AIR-1's LED turns red and stays red until things recover. The nice touch is that the notification checks the window sensors. If a bedroom window is already open it says ventilation is in progress. If they're all closed it suggests opening one.
+- **High PM2.5:** above 35µg/m³ for three minutes. This is mostly cooking.
+- **High VOC:** a VOC index above 250 for five minutes, with a nudge to check for cleaning products, cooking or poor ventilation.
+- **Recovery:** each alert has a matching "back to normal" automation (CO₂ under 800ppm, PM2.5 under 12, VOC under 150, each held for five minutes). It only fires if that alert was actually active, flashes the LED green for 30 seconds, then turns it off. A set of helper toggles tracks which alerts are active, so you don't get "all clear" messages for problems that never happened.
+- **A daily summary** at 9am with the current readings, flagging anything that's elevated.
+- **A weekly fan clean.** The SEN55 has a self-cleaning cycle that blows dust out of its fan, so every Sunday at 3am Home Assistant presses that button (if the sensor is online).
+
+The thresholds use the same hysteresis idea as the aircon: a different "alert" and "recovered" level, plus a sustained duration, so a single spike doesn't trigger anything.
+
+I also pull in outdoor data for comparison. The [EPA Victoria air quality integration](https://github.com/BJReplay/EPA_AirQuality_HA) gives readings from the nearest monitoring station, and the [Bureau of Meteorology integration](https://github.com/bremor/bureau_of_meteorology) handles weather. That makes it easy to tell whether a PM2.5 spike is something inside or the whole city being smoky. I'm definitely interested in upgrading to an outdoor air monitoring station at some point as the nearest monitoring station is a couple of km away.
+
+## The small stuff
+
+Some of the most-used automations are the simplest:
+
+- **Coffee.** The coffee machine is on a TP-Link Kasa smart plug, every morning Home Assistant turns it on so it's warmed up by the time I get to it. It's a one-trigger, one-action automation..
+- **TV and media.** The LG OLED (webOS) and the Nvidia Shield (Android TV) show up as media players.
+- **Weather.** The BOM integration feeds a forecast card on the home dashboard.
+
+## Dashboards
+
+Home Assistant dashboards are endlessly customisable. These are the views I currently have:
+
+- **Home:** the overview, with weather, the bedroom climate controls, a few gauges and a media player.
+- **Air Quality:** the AIR-1 readings with history graphs and a short guide to what the numbers mean.
+- **Bedroom:** the split system, the window sensors and the temperature history.
+- **Kitchen & Bathroom:** the coffee machine plug and the bathroom window sensor.
+- **Cameras:** live views and event history from both cameras.
+
+They're built with a few community cards from HACS: [Mushroom](https://github.com/piitaya/lovelace-mushroom) for clean, mobile-friendly entity cards, [mini-graph-card](https://github.com/kalkih/mini-graph-card) for compact history graphs, and [Advanced Camera Card](https://github.com/dermotduffy/advanced-camera-card) for the cameras, which pulls Frigate's clips and snapshots into a scrubbable timeline.
+
+I didn't hand-build any of these. More on that below.
+
+## Getting in from outside: Cloudflare Tunnel
+
+Home Assistant is only reachable on our home network by default. That's fine while I'm at home, but I want the app to work when I'm out too, and the notification images need a public URL.
+
+The traditional approach is port forwarding: open a port on your router, point a domain at your home IP and hope you've configured everything securely. This didn't seem to be one of the most secure options.
+
+Instead, I'm using a [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/). A small container called `cloudflared` runs on the Pi and makes an **outbound** connection to Cloudflare's edge (Melbourne and Sydney data centres, over QUIC). When I visit `ha.yourdomain.com` from my phone, the request hits Cloudflare, travels down that existing tunnel to the Pi, and gets handed to Home Assistant on port 8123.
+
+The benefits:
+
+- **No open ports on the router.** Nothing on my home network accepts connections from the internet. The Pi only ever connects out.
+- **Free TLS.** Cloudflare handles the HTTPS certificate.
+- **My home IP isn't exposed.** The domain resolves to Cloudflare, not to my house.
+- **It costs nothing.** Tunnels are free, and the domain was already on Cloudflare for this blog.
+
+The compose file is tiny, because the tunnel's routing (which hostname goes to which local port) is configured in the Cloudflare dashboard and the container just needs a token:
+
+```yaml
+services:
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflared
+    restart: unless-stopped
+    network_mode: host
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=${TUNNEL_TOKEN}
+    mem_limit: 256m
+```
+
+Home Assistant also needs to be told to trust the proxy, otherwise it sees every request as coming from localhost and rejects the forwarded headers:
+
+```yaml
+http:
+  use_x_forwarded_for: true
+  trusted_proxies:
+    - 127.0.0.1
+    - ::1
+```
+
+In the Companion app you can give Home Assistant both an internal address (the local IP) and an external one (the Cloudflare URL), and it switches between them depending on whether the phone is on the home Wi-Fi.
+
+## The rest of the Pi
+
+Because this is a normal Linux box rather than HAOS, it runs a few other things that have nothing to do with the house itself.
+
+### Pi-hole
+
+[Pi-hole](https://pi-hole.net/) is a DNS server that blocks ads and trackers for every device on the network, including the ones you can't install an ad blocker on: smart TVs, phones' in-app ads, and every "smart" gadget that phones home constantly. Mine blocks around 76,000 known ad, tracking and malware domains (the default StevenBlack list) and forwards everything else to Cloudflare's 1.1.1.1.
+
+A couple of details that took some figuring out:
+
+- It runs with `network_mode: host`. On Docker's default bridge network, every DNS query appears to come from the Docker gateway, so the query log is useless for working out which device is doing what.
+- Pi-hole v6 ships with its own NTP (time) server and client turned on. I've disabled both so it can't fight with the Pi's own clock sync. (Clock problems have caused me some grief previously)
+- It's excluded from Watchtower's automatic updates. If a bad Pi-hole update lands then DNS would break for the whole house.
+
+It barely registers on the Pi's resources.
+
+### Dockge
+
+[Dockge](https://github.com/louislam/dockge) is a lightweight web UI for Docker Compose stacks. Every service on the Pi lives as a compose file under `/opt/stacks/`, and Dockge gives me a page where I can see them all, check their logs, edit the compose file and restart a stack, without SSHing in. It's like Portainer, but simpler, and it works directly with plain compose files on disk rather than keeping its own database.
+
+### Watchtower
+
+[Watchtower](https://github.com/nicholas-fedor/watchtower) checks for new container images and updates them automatically: every Sunday at 4am, cleaning up the old images afterwards. Most containers are simply opted in. Frigate and Pi-hole are opted out with a label, because they're the ones where an unattended breaking change would really hurt. Home Assistant sits in between: it's pinned to the monthly tag, so Watchtower keeps it patched within the month and I handle the monthly upgrade myself.
+
+One gotcha: the original `containrrr/watchtower` project has been abandoned, and it now fails against recent Docker versions with an "API version too old" error. The maintained fork at `ghcr.io/nicholas-fedor/watchtower` is a drop-in replacement.
+
+### Beszel
+
+[Beszel](https://github.com/henrygd/beszel) is a lightweight monitoring dashboard: CPU, memory, disk, temperatures and network, with per-container breakdowns and history. A hub container serves the dashboard and an agent container reads the stats. It's how I can see at a glance that the Pi is ticking along at around 57°C and which container is using what. Given what happened in September, having this history matters.
+
+### Actual Budget
+
+Not home automation at all, but since the Pi's on all the time anyway, it also runs [Actual Budget](https://actualbudget.org/), a self-hosted, local-first budgeting app. Another subscription avoided, but have really been too lazy to properly use this.
+
+## When it all fell over
+
+In September the whole Pi wedged. Existing services kept half-working, but nothing new could start. SSH would accept a connection and then drop it before the login banner. The phone app couldn't log in. I had to pull the power to recover it.
+
+Working out what happened afterwards was frustrating, because the evidence was gone. The system journal was small and only kept in memory, so it didn't survive the reboot. The most likely culprit was memory pressure from Frigate. It turned out that **memory cgroups are disabled by default on Raspberry Pi OS**, which meant Docker's memory limits weren't being enforced (or even reported). One container could quietly eat all the RAM, and the kernel's out-of-memory killer never cleanly stepped in.
+
+The fixes that came out of it:
+
+1. **Turn on memory cgroups.** Add `cgroup_enable=memory cgroup_memory=1` to `/boot/firmware/cmdline.txt` and reboot. Now `mem_limit` actually means something.
+2. **Give every container a memory limit**, baked into its compose file: Frigate 2.5GB, Home Assistant 2GB, the small stuff 256–512MB. If something leaks, that container gets killed and restarted rather than taking the whole machine down.
+3. **Enable the hardware watchdog.** The Pi 5 has one. Setting `RuntimeWatchdogSec=14s` in systemd means that if the system locks up hard, it reboots itself within seconds instead of waiting for me to notice.
+4. **Keep logs across reboots.** The journal is now persistent, capped at 200MB, so next time there'll be something to look at.
+5. **Fix the clock.** This was a sneaky one. The Pi 5 has a real-time clock, but without the optional battery it doesn't keep time while powered off. After the hard power cycle, the clock came up about 13 hours wrong. That broke authentication tokens and TLS, which turned out to be the real reason the phone app couldn't log in. Installing `fake-hwclock` saves the time regularly and restores it at boot, so the clock is at least close until network time sync takes over.
+
+It's been solid since. But it's a good reminder that "self-hosted" also means "self-supported". So if you're someone who isn't keen on that, then this whole home lab / home automation stuff might not be up your alley.
+
+## Where Claude and ha-mcp come in
+
+The title of this post says I built this with Claude Code, so let's discuss how I used it.
+
+### The problem with self-hosting
+
+Self-hosting is great once it's running. Getting there has traditionally been a lot of work:
+
+- Reading documentation for every service, each with its own config format.
+- Writing Docker Compose files and working out the right volumes, devices, network modes and permissions.
+- Writing Home Assistant automations in YAML, including Jinja templates, which are powerful and fiddly in about equal measure.
+- Building dashboards card by card.
+- Debugging when things don't work, usually by searching forum threads from three versions ago.
+- Keeping it all updated and working.
+
+For most people, that's where the dream of a self-hosted smart home dies. Either you don't have the time, or you get 80% of the way there and the last 20% never gets done. It's also the main reason people pick HAOS over a more flexible setup. They want the add-on store to handle the Docker side for them. I know for me, it has always been something I looked at, but really never had the time to sit down and do all the required learning.
+
+### ha-mcp
+
+[MCP (Model Context Protocol)](https://modelcontextprotocol.io/) is an open standard that lets AI models use external tools: read data, call APIs, take actions. [ha-mcp](https://github.com/homeassistant-ai/ha-mcp) is an MCP server for Home Assistant. It gives an AI agent a set of tools to work with a Home Assistant instance: search entities and read their states, create and edit automations and scripts, build dashboards, inspect automation traces when something didn't fire, check logs, call services, and so on. It's paired with a small custom component in Home Assistant that adds file and YAML tools, so it can edit `configuration.yaml` too.
+
+It runs as just another container on the Pi:
+
+```yaml
+services:
+  ha-mcp:
+    image: ghcr.io/homeassistant-ai/ha-mcp:latest
+    container_name: ha-mcp-server
+    restart: unless-stopped
+    network_mode: host
+    command: ["ha-mcp-web"]
+    env_file:
+      - /home/anthony/.env   # HOMEASSISTANT_TOKEN lives here
+    environment:
+      - HOMEASSISTANT_URL=http://localhost:8123
+    mem_limit: 512m
+```
+
+It authenticates to Home Assistant with a long-lived access token and serves MCP over HTTP on port 8086. On my Mac, Claude Code is pointed at it with one entry in its config:
+
+```json
+"ha-mcp": {
+  "type": "http",
+  "url": "http://raspberrypi.local:8086/mcp"
+}
+```
+
+That's it. From then on, Claude can see and change my Home Assistant setup directly.
+
+Claude Code can also SSH into the Pi, so it can work at the host level: writing compose files, reading container logs, checking `dmesg`, editing system config. Between ha-mcp (inside Home Assistant) and SSH (the Linux box underneath), it can reach everything in the diagram above.
+
+### What that looks like day to day
+
+Instead of reading docs and writing YAML, I describe what I want in plain English.
+
+For the cooling, I explained the behaviour I wanted: day and night targets, windows overriding everything, no short-cycling. Claude looked up the actual entity IDs, wrote the automation, and explained the hysteresis and minimum-cycle logic back to me so I understood what it had built. When I wanted to tweak the night temperature, that was one sentence.
+
+For the dashboards, I asked for a home dashboard with views for the air quality, the bedroom and the cameras, using Mushroom cards. It built them directly in Home Assistant through ha-mcp, and when something looked off on my phone, I described it and it fixed it.
+
+For the infrastructure, it moved every container onto Dockge-managed compose stacks, set up Watchtower (and worked out why the original image was failing and switched to the maintained fork), set up Pi-hole with host networking and the NTP conflict sorted, deployed Beszel, and wrote out all the memory limits.
+
+For the outage, it did the forensic work: checking what logs survived, finding that memory cgroups were off, spotting the clock drift that was breaking app logins, and then applying the five fixes above, taking backups of every file before it changed it.
+
+For notifications, the snapshot-then-GIF flow, the zone tuning in Frigate, and the self-healing detect switches all came out of a few conversations along the lines of "the notification image is too pixelated", "I'm getting alerts for people on the footpath" and "why didn't I get a notification when the doorbell rang?"
+
+Even the diagram at the top of this post came out of the same workflow. Claude pulled the actual configuration off the Pi and drew it, so it reflects what's really running rather than what I think is running.
+
+None of this would've been possible unless I spent countless hours to get to this point.
+
+### The bits to be careful with
+
+Some things to be aware of:
+
+- **The token is effectively admin.** A Home Assistant long-lived access token can do almost anything, so whatever holds it can control your house. I keep ha-mcp on the local network only. It isn't exposed through the Cloudflare Tunnel.
+- **Review what it does.** Claude is very good at this, but it's still working from what it can see, and it can be confidently wrong. I read the automations it writes, and I'd encourage anyone doing this to actually understand the logic. The upside is that it explains things well, so this has taught me a lot more about Home Assistant than copying YAML from forums/Reddit etc...
+- **Backups.** HA Container doesn't have HAOS's built-in backup system, so it's worth making sure the config directory is backed up somewhere. Claude takes a dated copy of any file before it edits it, but that's not a substitute for real backups.
+- **It doesn't remove the need to care.** Something still has to notice when a notification doesn't arrive. So you still need to be looking for continuous improvement and finding where issues exist yourself.
+
+But the overall shift is real. The bottleneck used to be knowing how: which config key, which integration, which template syntax. Now it's mostly deciding what I want. The hours I'd have spent writing and debugging YAML go into thinking about how the house should behave.
+
+## Was it worth it?
+
+Absolutely.
+
+- **The subscription is gone.** No more Google Home subscription. The cameras are better, the detection is smarter (zones are miles ahead of what I had with Nest), and the footage never leaves the house.
+- **The aircon finally does what I want.** It cools to different targets day and night, never runs with a window open, and doesn't short-cycle.
+- **Everything is local** apart from the aircon's last hop, and Cloudflare for remote access. If the internet goes down, the sensors, cameras, recordings, automations and dashboards on the home network all keep working.
+- **I'm not locked in.** Anything that speaks Zigbee, MQTT, ESPHome or RTSP just works, regardless of brand.
+- **It's all on one small, quiet, low-power box** that also blocks ads for the whole house.
+
+## What's next
+
+A few things on the list:
+
+- **A local controller for the aircon.** An ESP32 on the split system's CN105 port running ESPHome would remove the last cloud dependency.
+- **More sensors.** Contact sensors on the remaining windows and doors, and temperature sensors in the other rooms, so the cooling logic can work on more than the one room.
+- **Proper offsite backups** of the Home Assistant and Frigate config.
+- **Cloudflare Access** in front of the more sensitive admin interfaces, if I ever decide to expose any of them remotely.
+
+If you're stuck in an ecosystem you're not happy with, I'd really recommend giving Home Assistant a go. A Raspberry Pi, a Zigbee dongle and a couple of sensors is a cheap way to start, and with tools like Claude Code and ha-mcp, the time it takes to get from "I wish my house did X" to "my house does X" isn't a whole weekend, but rather a few minutes. All that's really required are some great use cases.

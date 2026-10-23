@@ -1,0 +1,337 @@
+---
+// Architecture diagram for the home automation post. Drawn as inline SVG so it
+// picks up the site's fonts and colour tokens (and dark mode) for free.
+// Hovering a box highlights everything it talks to.
+
+type Kind = 'svc' | 'core' | 'hw' | 'cloud' | 'client' | 'dev';
+type Node = { id: string; x: number; y: number; w: number; h: number; title: string; sub?: string; kind: Kind };
+type Edge = { from: string; to: string; d: string; label?: string; lx?: number; ly?: number; both?: boolean; dashed?: boolean };
+
+const nodes: Node[] = [
+  // Clients & cloud
+  { id: 'mac', x: 14, y: 40, w: 102, h: 52, title: 'Mac', sub: 'Claude Code', kind: 'client' },
+  { id: 'phones', x: 126, y: 40, w: 90, h: 52, title: 'Phones', sub: 'Companion app', kind: 'client' },
+  { id: 'cf', x: 232, y: 40, w: 136, h: 52, title: 'Cloudflare edge', sub: 'ha.yourdomain.com', kind: 'cloud' },
+  { id: 'relay', x: 378, y: 40, w: 104, h: 52, title: 'HA push relay', sub: '→ Apple APNs', kind: 'cloud' },
+  { id: 'melview', x: 492, y: 40, w: 104, h: 52, title: 'MELView', sub: 'Mitsubishi cloud', kind: 'cloud' },
+  { id: 'dns', x: 606, y: 40, w: 100, h: 52, title: 'Cloudflare DNS', sub: '1.1.1.1', kind: 'cloud' },
+
+  // Raspberry Pi 5
+  { id: 'mcp', x: 14, y: 185, w: 102, h: 48, title: 'ha-mcp', sub: ':8086/mcp', kind: 'svc' },
+  { id: 'cfd', x: 232, y: 185, w: 136, h: 48, title: 'cloudflared', sub: 'outbound tunnel', kind: 'svc' },
+  { id: 'pihole', x: 606, y: 185, w: 100, h: 48, title: 'Pi-hole', sub: 'DNS · :53', kind: 'svc' },
+  { id: 'ha', x: 210, y: 265, w: 250, h: 220, title: 'Home Assistant', kind: 'core' },
+  { id: 'mqtt', x: 14, y: 290, w: 140, h: 50, title: 'Mosquitto', sub: 'MQTT broker', kind: 'svc' },
+  { id: 'z2m', x: 14, y: 390, w: 140, h: 50, title: 'Zigbee2MQTT', sub: 'Zigbee coordinator', kind: 'svc' },
+  { id: 'sonoff', x: 14, y: 490, w: 140, h: 46, title: 'Sonoff ZBDongle-P', sub: 'USB · Zigbee 3.0', kind: 'hw' },
+  { id: 'coral', x: 540, y: 385, w: 166, h: 44, title: 'Coral USB', sub: 'Edge TPU', kind: 'hw' },
+  { id: 'frigate', x: 540, y: 447, w: 166, h: 54, title: 'Frigate + go2rtc', sub: 'NVR · object detection', kind: 'svc' },
+
+  // In the house
+  { id: 'contact', x: 14, y: 668, w: 220, h: 52, title: 'Aqara T1 contact sensors ×3', sub: 'bedroom windows · bathroom louvres', kind: 'dev' },
+  { id: 'air1', x: 244, y: 668, w: 100, h: 52, title: 'Apollo AIR-1', sub: 'CO₂ · PM2.5 · VOC', kind: 'dev' },
+  { id: 'lan', x: 354, y: 668, w: 120, h: 52, title: 'Kasa · LG TV', sub: 'Shield · Cast', kind: 'dev' },
+  { id: 'doorbell', x: 540, y: 668, w: 79, h: 52, title: 'Reolink', sub: 'doorbell', kind: 'dev' },
+  { id: 'lumus', x: 627, y: 668, w: 79, h: 52, title: 'Reolink', sub: 'Lumus', kind: 'dev' },
+  { id: 'ac', x: 354, y: 734, w: 352, h: 46, title: 'Mitsubishi Electric split system', sub: 'bedroom · Wi-Fi adapter', kind: 'dev' },
+];
+
+const edges: Edge[] = [
+  { from: 'mac', to: 'mcp', d: 'M65 92 V185', label: 'MCP', lx: 65, ly: 160 },
+  { from: 'phones', to: 'cf', d: 'M216 66 H232' },
+  { from: 'relay', to: 'phones', d: 'M430 40 V30 H171 V40' },
+  { from: 'cf', to: 'cfd', d: 'M300 92 V185', label: 'tunnel', lx: 300, ly: 160, both: true },
+  { from: 'cfd', to: 'ha', d: 'M300 233 V265' },
+  { from: 'mcp', to: 'ha', d: 'M116 209 H220 V265', label: 'API', lx: 170, ly: 209 },
+  { from: 'ha', to: 'relay', d: 'M430 265 V92', label: 'push', lx: 430, ly: 160 },
+  { from: 'ha', to: 'melview', d: 'M450 265 V250 H544 V92', both: true },
+  { from: 'melview', to: 'ac', d: 'M544 40 V24 H725 V757 H706', both: true, dashed: true },
+  { from: 'pihole', to: 'dns', d: 'M656 185 V92', label: 'upstream', lx: 656, ly: 145 },
+  { from: 'mqtt', to: 'ha', d: 'M154 315 H210', label: 'MQTT', lx: 182, ly: 315, both: true },
+  { from: 'z2m', to: 'mqtt', d: 'M84 390 V340', label: 'MQTT', lx: 84, ly: 365 },
+  { from: 'sonoff', to: 'z2m', d: 'M84 490 V440', label: 'serial', lx: 84, ly: 465 },
+  { from: 'coral', to: 'frigate', d: 'M623 429 V447', both: true },
+  { from: 'frigate', to: 'ha', d: 'M540 474 H460', label: 'events', lx: 500, ly: 474 },
+  { from: 'contact', to: 'sonoff', d: 'M84 668 V536', label: 'Zigbee', lx: 84, ly: 588 },
+  { from: 'air1', to: 'ha', d: 'M294 668 V485', label: 'ESPHome', lx: 294, ly: 588 },
+  { from: 'lan', to: 'ha', d: 'M409 668 V485', label: 'local', lx: 409, ly: 588, both: true },
+  { from: 'doorbell', to: 'ha', d: 'M556 668 V560 H445 V485', label: 'Reolink', lx: 500, ly: 560 },
+  { from: 'doorbell', to: 'frigate', d: 'M590 668 V501', label: 'RTSP', lx: 590, ly: 588 },
+  { from: 'lumus', to: 'frigate', d: 'M667 668 V501', label: 'RTSP', lx: 667, ly: 588 },
+];
+
+const coreLines = [
+  'Automations · scripts · dashboards',
+  'Notifications to every phone',
+  '',
+  'MQTT · Frigate · Reolink · ESPHome',
+  'MELView · Kasa · webOS · Cast',
+  'BOM · EPA Victoria (via HACS)',
+];
+---
+
+<figure class="homelab">
+  <div class="scroll">
+    <svg viewBox="0 0 735 800" role="img" aria-labelledby="homelab-title homelab-desc">
+      <title id="homelab-title">Home automation architecture on a Raspberry Pi 5</title>
+      <desc id="homelab-desc">
+        A Raspberry Pi 5 runs Home Assistant in Docker alongside Mosquitto, Zigbee2MQTT, Frigate with a Coral TPU,
+        Pi-hole, cloudflared and ha-mcp. Aqara Zigbee sensors reach Home Assistant through a Sonoff USB dongle and
+        Zigbee2MQTT. Two Reolink cameras stream RTSP to Frigate. An Apollo AIR-1 connects over ESPHome. Phones reach
+        Home Assistant remotely through a Cloudflare Tunnel, Claude Code on a Mac talks to it through ha-mcp, and the
+        Mitsubishi split system is controlled via Mitsubishi's MELView cloud.
+      </desc>
+      <defs>
+        <marker id="homelab-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 1 L10 5 L0 9 z" class="arrowhead" />
+        </marker>
+      </defs>
+
+      <rect class="group" x="0" y="0" width="720" height="110" rx="8" />
+      <text class="group-label" x="14" y="24">Clients &amp; cloud</text>
+
+      <rect class="group pi" x="0" y="130" width="720" height="472" rx="8" />
+      <text class="group-label pi-label" x="128" y="154">Raspberry Pi 5</text>
+      <text class="sub start" x="128" y="170">8GB · NVMe · Docker</text>
+
+      <rect class="group" x="0" y="622" width="720" height="170" rx="8" />
+      <text class="group-label" x="14" y="772">In the house</text>
+
+      <g class="panel">
+        <rect x="490" y="265" width="216" height="100" rx="6" />
+        <text class="panel-title" x="504" y="287">Also on the Pi</text>
+        <text class="sub" x="504" y="306">Dockge · compose stacks</text>
+        <text class="sub" x="504" y="322">Watchtower · Sunday updates</text>
+        <text class="sub" x="504" y="338">Beszel · monitoring</text>
+        <text class="sub" x="504" y="354">Actual Budget</text>
+      </g>
+
+      <g class="edges">
+        {edges.map((e) => (
+          <g class="edge" data-from={e.from} data-to={e.to}>
+            <path
+              d={e.d}
+              class:list={{ dashed: e.dashed }}
+              marker-end="url(#homelab-arrow)"
+              marker-start={e.both ? 'url(#homelab-arrow)' : undefined}
+            />
+            {e.label && (
+              <text class="edge-label" x={e.lx} y={e.ly}>
+                {e.label}
+              </text>
+            )}
+          </g>
+        ))}
+      </g>
+
+      <g class="nodes">
+        {nodes.map((n) => (
+          <g class:list={['node', n.kind]} data-id={n.id}>
+            <rect x={n.x} y={n.y} width={n.w} height={n.h} rx="6" />
+            {n.kind === 'core' ? (
+              <>
+                <text class="core-title" x={n.x + n.w / 2} y={n.y + 32}>{n.title}</text>
+                <text class="sub" x={n.x + n.w / 2} y={n.y + 50}>Container · :8123</text>
+                {coreLines.map((line, i) => (
+                  <text class="core-line" x={n.x + n.w / 2} y={n.y + 84 + i * 19}>{line}</text>
+                ))}
+              </>
+            ) : (
+              <>
+                <text class="title" x={n.x + n.w / 2} y={n.y + n.h / 2 + (n.sub ? -3 : 4)}>{n.title}</text>
+                {n.sub && <text class="sub" x={n.x + n.w / 2} y={n.y + n.h / 2 + 13}>{n.sub}</text>}
+              </>
+            )}
+          </g>
+        ))}
+      </g>
+    </svg>
+  </div>
+  <figcaption>
+    Everything runs on the Pi. The only cloud pieces are Cloudflare (remote access and DNS), the Home Assistant push
+    relay for notifications, and Mitsubishi's MELView for the aircon. Hover a box to trace its connections.
+  </figcaption>
+</figure>
+
+<style>
+  .homelab {
+    width: min(46rem, calc(100vw - 2.5rem));
+    margin: 2.5rem 0;
+    margin-left: 50%;
+    transform: translateX(-50%);
+  }
+  .scroll {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  svg {
+    display: block;
+    width: 100%;
+    min-width: 600px;
+    height: auto;
+    margin: 0;
+    font-family: var(--font-serif);
+    font-variant-numeric: lining-nums;
+  }
+  text {
+    fill: var(--ink);
+  }
+  .group {
+    fill: color-mix(in srgb, var(--code-bg) 55%, transparent);
+    stroke: var(--rule-strong);
+    stroke-dasharray: 3 4;
+  }
+  .group.pi {
+    fill: color-mix(in srgb, var(--accent) 4%, transparent);
+    stroke: var(--accent);
+    stroke-dasharray: none;
+    stroke-width: 1.5;
+  }
+  .group-label {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    fill: var(--muted);
+  }
+  .group-label.pi-label {
+    fill: var(--accent);
+    font-weight: 500;
+  }
+  .panel rect {
+    fill: var(--paper);
+    stroke: var(--rule-strong);
+    stroke-dasharray: 3 3;
+  }
+  .panel-title {
+    font-size: 13px;
+    font-weight: 650;
+  }
+  .panel .sub,
+  .sub.start {
+    text-anchor: start;
+  }
+  .node rect {
+    fill: var(--paper);
+    stroke: var(--rule-strong);
+    stroke-width: 1;
+    transition: stroke 0.15s, opacity 0.15s;
+  }
+  .node text {
+    text-anchor: middle;
+  }
+  .node.core rect {
+    stroke: var(--accent);
+    stroke-width: 1.75;
+  }
+  .node.hw rect {
+    fill: var(--code-bg);
+  }
+  .node.cloud rect {
+    stroke-dasharray: 4 3;
+  }
+  .node.client rect {
+    fill: color-mix(in srgb, var(--ink) 4%, var(--paper));
+  }
+  .title {
+    font-size: 13px;
+    font-weight: 650;
+  }
+  .core-title {
+    font-size: 18px;
+    font-weight: 650;
+  }
+  .core-line {
+    font-size: 12.5px;
+  }
+  .sub {
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    fill: var(--muted);
+    text-anchor: middle;
+  }
+  .edge path {
+    fill: none;
+    stroke: var(--muted);
+    stroke-width: 1.1;
+    transition: stroke 0.15s, opacity 0.15s;
+  }
+  .edge path.dashed {
+    stroke-dasharray: 4 3;
+  }
+  .arrowhead {
+    fill: var(--muted);
+  }
+  .edge-label {
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    fill: var(--muted);
+    text-anchor: middle;
+    dominant-baseline: middle;
+    paint-order: stroke;
+    stroke: var(--paper);
+    stroke-width: 5px;
+    stroke-linejoin: round;
+  }
+
+  /* Hover: fade everything, then bring back the hovered box and its links. */
+  .nodes .node,
+  .edges .edge {
+    transition: opacity 0.15s;
+  }
+  svg.tracing .node:not(.lit),
+  svg.tracing .edge:not(.lit) {
+    opacity: 0.25;
+  }
+  svg.tracing .edge.lit path {
+    stroke: var(--accent);
+    stroke-width: 1.6;
+  }
+  svg.tracing .edge.lit .edge-label {
+    fill: var(--accent);
+  }
+  svg.tracing .node.lit rect {
+    stroke: var(--accent);
+  }
+  .node {
+    cursor: default;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .node rect,
+    .edge path,
+    .nodes .node,
+    .edges .edge {
+      transition: none;
+    }
+  }
+</style>
+
+<script>
+  for (const svg of document.querySelectorAll<SVGSVGElement>('.homelab svg')) {
+    const nodes = [...svg.querySelectorAll<SVGGElement>('.node')];
+    const edges = [...svg.querySelectorAll<SVGGElement>('.edge')];
+
+    const clear = () => {
+      svg.classList.remove('tracing');
+      for (const el of [...nodes, ...edges]) el.classList.remove('lit');
+    };
+
+    for (const node of nodes) {
+      const id = node.dataset.id;
+      node.addEventListener('pointerenter', () => {
+        clear();
+        svg.classList.add('tracing');
+        node.classList.add('lit');
+        for (const edge of edges) {
+          const { from, to } = edge.dataset;
+          if (from !== id && to !== id) continue;
+          edge.classList.add('lit');
+          const other = from === id ? to : from;
+          svg.querySelector(`.node[data-id="${other}"]`)?.classList.add('lit');
+        }
+      });
+      node.addEventListener('pointerleave', clear);
+    }
+  }
+</script>
