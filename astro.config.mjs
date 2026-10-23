@@ -10,8 +10,6 @@ export default defineConfig({
   // The old Jekyll site paginated the home page; everything lives on / now.
   redirects: {
     '/page2/': '/',
-    // Renamed the day it was published.
-    '/tech/building-a-subscription-free-smart-home-pi-5-claude/': '/tech/home-assistant-raspberry-pi-5/',
   },
   markdown: {
     shikiConfig: {
