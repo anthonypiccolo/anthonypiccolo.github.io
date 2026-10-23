@@ -1,0 +1,16 @@
+{
+  // Starts the "Update vitals" GitHub Actions workflow every 15 minutes.
+  // GitHub's own cron is often hours late; workflow_dispatch runs promptly.
+  "name": "vitals-cron",
+  "main": "index.js",
+  "compatibility_date": "2026-10-01",
+  "workers_dev": false,
+  "triggers": { "crons": ["*/15 * * * *"] },
+  "vars": {
+    "REPO": "anthonypiccolo/anthonypiccolo.github.io",
+    "WORKFLOW": "vitals.yml",
+    "REF": "master"
+  }
+  // Secret GITHUB_TOKEN: fine-grained token, this repo only, Actions read & write.
+  //   npx wrangler secret put GITHUB_TOKEN
+}

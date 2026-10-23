@@ -1,0 +1,298 @@
+---
+import { RUNNING_URL } from '../consts';
+---
+
+<section class="running" data-src={RUNNING_URL} hidden>
+  <div class="year">
+    <p class="label"><span data-r="year"></span> so far</p>
+    <p class="year-km"><span data-r="km">–</span><span class="unit">km</span></p>
+    <p class="label">
+      <span data-r="runs"></span> runs · longest <span data-r="longest"></span> km · <span data-r="avg"></span> km a week
+    </p>
+  </div>
+
+  <figure class="weeks">
+    <div class="bars" tabindex="0" role="img">
+      <div class="tooltip" hidden></div>
+    </div>
+    <div class="months" aria-hidden="true"></div>
+    <figcaption>Weekly distance, last 52 weeks</figcaption>
+  </figure>
+
+  <h2>Recent runs</h2>
+  <ol class="runs"></ol>
+</section>
+
+<script>
+  import { pace, shortDate } from '../lib/format';
+
+  type Run = {
+    date: string;
+    type: string | null;
+    distanceKm: number;
+    durationSec: number;
+    avgHr: number | null;
+    elevationGainM: number | null;
+    route: string | null;
+  };
+  type Running = {
+    year: { year: number; km: number; runs: number; longestKm: number };
+    weeks: [string, number][];
+    recent: Run[];
+  };
+
+  const section = document.querySelector<HTMLElement>('.running')!;
+  const set = (name: string, value: string | number) => {
+    section.querySelector(`[data-r="${name}"]`)!.textContent = String(value);
+  };
+
+  function drawWeeks(weeks: [string, number][]) {
+    const bars = section.querySelector<HTMLElement>('.bars')!;
+    const tooltip = bars.querySelector<HTMLElement>('.tooltip')!;
+    const max = Math.max(...weeks.map(([, km]) => km), 1);
+
+    const columns = weeks.map(([monday, km]) => {
+      const bar = document.createElement('span');
+      bar.className = 'bar';
+      bar.style.setProperty('--h', `${(km / max) * 100}%`);
+      if (km === 0) bar.classList.add('empty');
+      bars.append(bar);
+      return bar;
+    });
+
+    let index = weeks.length - 1;
+    const show = (i: number) => {
+      index = Math.max(0, Math.min(weeks.length - 1, i));
+      columns.forEach((bar, j) => bar.classList.toggle('active', j === index));
+      const [monday, km] = weeks[index];
+      tooltip.hidden = false;
+      tooltip.innerHTML = `<strong>${km.toFixed(1)} km</strong> week of ${shortDate(monday, false)}`;
+      const fraction = (index + 0.5) / weeks.length;
+      tooltip.style.left = `${fraction * 100}%`;
+      tooltip.style.translate = `${-fraction * 100}% 0`;
+    };
+    const hide = () => {
+      tooltip.hidden = true;
+      columns.forEach((bar) => bar.classList.remove('active'));
+    };
+    bars.addEventListener('pointermove', (event) => {
+      const rect = bars.getBoundingClientRect();
+      show(Math.floor(((event.clientX - rect.left) / rect.width) * weeks.length));
+    });
+    bars.addEventListener('pointerleave', hide);
+    bars.addEventListener('focus', () => show(index));
+    bars.addEventListener('blur', hide);
+    bars.addEventListener('keydown', (event) => {
+      const step = { ArrowLeft: -1, ArrowRight: 1 }[event.key];
+      if (step) {
+        event.preventDefault();
+        show(index + step);
+      }
+    });
+    const total = weeks.reduce((sum, [, km]) => sum + km, 0);
+    bars.setAttribute(
+      'aria-label',
+      `Weekly running distance over the last 52 weeks: ${Math.round(total)} km in total, up to ${max.toFixed(1)} km in a week.`,
+    );
+
+    // Label the first week of each month.
+    const months = section.querySelector<HTMLElement>('.months')!;
+    let lastMonth = -1;
+    let labelled = 0;
+    weeks.forEach(([monday], i) => {
+      const month = new Date(`${monday}T12:00:00`).getMonth();
+      if (month !== lastMonth && i > 0) {
+        const label = document.createElement('span');
+        if (labelled++ % 2) label.className = 'alternate';
+        label.textContent = new Date(`${monday}T12:00:00`).toLocaleDateString('en-AU', { month: 'short' });
+        label.style.left = `${(i / weeks.length) * 100}%`;
+        months.append(label);
+      }
+      lastMonth = month;
+    });
+  }
+
+  function drawRuns(runs: Run[]) {
+    const list = section.querySelector('.runs')!;
+    for (const run of runs) {
+      const item = document.createElement('li');
+      const shape = run.route
+        ? `<svg viewBox="0 0 100 100" aria-hidden="true"><path d="${run.route}" /></svg>`
+        : `<span class="no-route">${run.type?.includes('treadmill') ? 'Treadmill' : 'No GPS'}</span>`;
+      const details = [
+        pace(run.durationSec, run.distanceKm),
+        run.avgHr && `${run.avgHr} bpm`,
+        run.elevationGainM && `↑${run.elevationGainM} m`,
+      ].filter(Boolean).map((detail) => `<span>${detail}</span>`);
+      item.innerHTML = `
+        <div class="route">${shape}</div>
+        <p class="run-km">${run.distanceKm.toFixed(1)} km</p>
+        <p class="run-meta">${shortDate(run.date)}<br />${details.join(' · ')}</p>`;
+      list.append(item);
+    }
+  }
+
+  function render(data: Running) {
+    const { year, weeks, recent } = data;
+    set('year', year.year);
+    set('km', Math.round(year.km).toLocaleString('en-AU'));
+    set('runs', year.runs);
+    set('longest', year.longestKm.toFixed(1));
+    set('avg', (weeks.reduce((sum, [, km]) => sum + km, 0) / weeks.length).toFixed(1));
+    drawWeeks(weeks);
+    drawRuns(recent);
+    section.hidden = false;
+  }
+
+  fetch(section.dataset.src!, { cache: 'no-cache' })
+    .then((response) => (response.ok ? response.json() : Promise.reject(response.status)))
+    .then(render)
+    .catch(() => {});
+</script>
+
+<style>
+  .running {
+    font-family: var(--font-mono);
+    font-variant-numeric: lining-nums;
+  }
+  .label {
+    margin: 0;
+    font-size: 0.75rem;
+    color: var(--muted);
+  }
+  .year-km {
+    margin: 0.25rem 0;
+    font-size: 3rem;
+    font-weight: 500;
+    line-height: 1;
+    letter-spacing: -0.03em;
+  }
+  .unit {
+    margin-left: 0.4rem;
+    font-size: 0.875rem;
+    letter-spacing: 0;
+    color: var(--muted);
+  }
+
+  .weeks {
+    margin: 2rem 0 0;
+  }
+  .bars {
+    position: relative;
+    display: flex;
+    align-items: flex-end;
+    gap: 2px;
+    height: 8rem;
+    border-bottom: 1px solid var(--rule-strong);
+    outline-offset: 4px;
+    touch-action: pan-y;
+  }
+  .bars :global(.bar) {
+    flex: 1;
+    height: var(--h);
+    min-height: 2px;
+    border-radius: 2px 2px 0 0;
+    background: var(--accent);
+    opacity: 0.85;
+  }
+  .bars :global(.bar.empty) {
+    min-height: 0;
+  }
+  .bars :global(.bar.active) {
+    opacity: 1;
+    box-shadow: 0 0 0 1px var(--ink);
+  }
+  .tooltip {
+    position: absolute;
+    bottom: calc(100% + 0.5rem);
+    padding: 0.25rem 0.5rem;
+    border: 1px solid var(--rule-strong);
+    border-radius: 4px;
+    background: var(--paper);
+    font-size: 0.75rem;
+    white-space: nowrap;
+    pointer-events: none;
+  }
+  .tooltip :global(strong) {
+    font-weight: 500;
+    margin-right: 0.25rem;
+  }
+  .months {
+    position: relative;
+    height: 1.25rem;
+    font-size: 0.6875rem;
+    color: var(--muted);
+  }
+  .months :global(span) {
+    position: absolute;
+    top: 0.35rem;
+  }
+  @media (max-width: 36rem) {
+    .months :global(.alternate) {
+      display: none;
+    }
+  }
+  figcaption {
+    margin-top: 0.5rem;
+    font-size: 0.6875rem;
+    color: var(--muted);
+  }
+
+  h2 {
+    margin: 3.5rem 0 1.25rem;
+    font-family: var(--font-serif);
+    font-size: 1.25rem;
+  }
+  .runs {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1.75rem 1.25rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  @media (max-width: 36rem) {
+    .runs {
+      grid-template-columns: repeat(2, 1fr);
+    }
+  }
+  .runs :global(.route) {
+    display: grid;
+    place-items: center;
+    aspect-ratio: 1;
+    margin-bottom: 0.6rem;
+    border-radius: 8px;
+    background: var(--code-bg);
+  }
+  .runs :global(.route svg) {
+    width: 82%;
+    height: 82%;
+    overflow: visible;
+  }
+  .runs :global(.route path) {
+    fill: none;
+    stroke: var(--accent);
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    vector-effect: non-scaling-stroke;
+  }
+  .runs :global(.no-route) {
+    font-size: 0.6875rem;
+    color: var(--muted);
+  }
+  .runs :global(.run-km) {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 500;
+  }
+  .runs :global(.run-meta span) {
+    white-space: nowrap;
+  }
+  .runs :global(.run-meta) {
+    margin: 0.15rem 0 0;
+    font-size: 0.6875rem;
+    line-height: 1.5;
+    color: var(--muted);
+  }
+</style>

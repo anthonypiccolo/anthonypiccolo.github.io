@@ -1,0 +1,29 @@
+---
+import RunningStats from '../components/RunningStats.astro';
+import Vitals from '../components/Vitals.astro';
+import Base from '../layouts/Base.astro';
+---
+
+<Base title="Running" description="Anthony Piccolo’s running, straight from his Garmin: this year’s distance, weekly mileage and recent runs.">
+  <h1 class="page-title">Running</h1>
+  <p class="lede">
+    Straight from the Garmin on my wrist, refreshed every 15 minutes or so. Route shapes are drawn without a map, and
+    trimmed at both ends.
+  </p>
+  <Vitals />
+  <RunningStats />
+</Base>
+
+<style>
+  .page-title {
+    margin: 0 0 1rem;
+    font-size: clamp(2rem, 1.4rem + 2.6vw, 3rem);
+    line-height: 1.1;
+    letter-spacing: -0.02em;
+  }
+  .lede {
+    margin: 0 0 2.5rem;
+    color: var(--muted);
+    text-wrap: pretty;
+  }
+</style>

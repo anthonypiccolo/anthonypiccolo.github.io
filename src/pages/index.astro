@@ -1,0 +1,89 @@
+---
+import Vitals from '../components/Vitals.astro';
+import Base from '../layouts/Base.astro';
+import { getPosts, postUrl } from '../lib/posts';
+
+const posts = await getPosts();
+const years = Map.groupBy(posts, (post) => post.data.date.getUTCFullYear());
+---
+
+<Base>
+  <section class="intro">
+    <p>
+      I’m Anthony, a product analyst in Melbourne. I write about tech, coffee, politics and 
+      running. <a href="/about/">More about me</a>.
+    </p>
+  </section>
+
+  <Vitals compact />
+
+  <section aria-label="Writing">
+    {[...years].map(([year, yearPosts]) => (
+      <div class="year">
+        <h2>{year}</h2>
+        <ul>
+          {yearPosts.map((post) => (
+            <li>
+              <a href={postUrl(post)}>{post.data.title}</a>
+            </li>
+          ))}
+        </ul>
+      </div>
+    ))}
+  </section>
+</Base>
+
+<style>
+  .intro {
+    margin-bottom: 4rem;
+    font-size: clamp(1.25rem, 1.1rem + 0.6vw, 1.5rem);
+    line-height: 1.45;
+    text-wrap: pretty;
+  }
+  .intro p {
+    margin: 0;
+  }
+  .year {
+    display: grid;
+    grid-template-columns: 4.5rem 1fr;
+    gap: 1rem;
+    padding-block: 1.25rem;
+    border-top: 1px solid var(--rule);
+  }
+  h2 {
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: 0.8125rem;
+    font-weight: 400;
+    line-height: 2.1rem;
+    color: var(--muted);
+  }
+  ul {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  li {
+    padding-block: 0.25rem;
+    line-height: 1.4;
+    text-wrap: pretty;
+  }
+  li + li {
+    margin-top: 0.4rem;
+  }
+  li a {
+    color: var(--ink);
+    text-decoration: none;
+    font-weight: 500;
+  }
+  li a:hover {
+    text-decoration: underline;
+    text-decoration-color: var(--accent);
+  }
+  @media (max-width: 30rem) {
+    .year {
+      grid-template-columns: 1fr;
+      gap: 0.25rem;
+    }
+  }
+</style>

@@ -1,0 +1,475 @@
+---
+import { VITALS_URL } from '../consts';
+
+interface Props {
+  /** Show a one-line summary that expands into the full card. */
+  compact?: boolean;
+}
+
+const { compact = false } = Astro.props;
+---
+
+<div class="vitals-root" data-src={VITALS_URL} hidden>
+  {compact && (
+    <button class="strip" type="button" aria-expanded="false" aria-controls="vitals-card">
+      <span class="strip-hr">
+        <svg class="heart" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 21s-7.5-4.6-9.6-9.3C.9 8.2 3 4.5 6.6 4.5c2.1 0 3.6 1.2 4.4 2.6.8-1.4 2.3-2.6 4.4-2.6 3.6 0 5.7 3.7 4.2 7.2C19.5 16.4 12 21 12 21z" />
+        </svg>
+        <span><span data-field="hr">–</span> bpm</span>
+      </span>
+      <span class="strip-extra strip-battery">Body Battery <span data-field="battery">–</span></span>
+      <span class="strip-extra"><span data-field="week">–</span> km this week</span>
+      <span class="strip-toggle">Vitals<span class="chevron" aria-hidden="true">↓</span></span>
+    </button>
+  )}
+
+<section class="vitals" id="vitals-card" aria-labelledby="vitals-title" hidden={compact}>
+  <header class="vitals-header">
+    <h2 id="vitals-title">Anthony’s vitals</h2>
+    <p class="synced">Forerunner 745 · synced <time data-synced></time></p>
+  </header>
+
+  <div class="hero">
+    <svg class="heart" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M12 21s-7.5-4.6-9.6-9.3C.9 8.2 3 4.5 6.6 4.5c2.1 0 3.6 1.2 4.4 2.6.8-1.4 2.3-2.6 4.4-2.6 3.6 0 5.7 3.7 4.2 7.2C19.5 16.4 12 21 12 21z" />
+    </svg>
+    <p class="hero-value"><span data-field="hr">–</span><span class="unit">bpm</span></p>
+    <p class="hero-caption">Latest heart rate, <span data-field="hr-at"></span></p>
+  </div>
+
+  <figure class="chart">
+    <div class="plot" tabindex="0" role="img">
+      <svg class="chart-svg" preserveAspectRatio="none" aria-hidden="true">
+        <path class="area" />
+        <path class="line" />
+        <line class="crosshair" y1="0" y2="100%" />
+      </svg>
+      <span class="y-label y-max"></span>
+      <span class="y-label y-min"></span>
+      <div class="tooltip" hidden></div>
+    </div>
+    <figcaption>Heart rate, last 24 hours</figcaption>
+  </figure>
+
+  <dl class="tiles">
+    <div>
+      <dt>Resting HR</dt>
+      <dd><span data-field="resting">–</span><small> bpm</small></dd>
+    </div>
+    <div>
+      <dt>Body Battery</dt>
+      <dd><span data-field="battery">–</span><small> / 100</small><span class="meter" aria-hidden="true"><span data-field="battery-bar"></span></span></dd>
+    </div>
+    <div>
+      <dt>Sleep</dt>
+      <dd><span data-field="sleep">–</span><span class="sub" data-field="sleep-score"></span></dd>
+    </div>
+    <div>
+      <dt data-field="steps-label">Steps today</dt>
+      <dd><span data-field="steps">–</span><span class="meter" aria-hidden="true"><span data-field="steps-bar"></span></span></dd>
+    </div>
+    <div>
+      <dt>Run this week</dt>
+      <dd><span data-field="week">–</span><small> km</small><span class="sub" data-field="vo2"></span></dd>
+    </div>
+    <div>
+      <dt>Last run</dt>
+      <dd><span data-field="last-run">–</span><span class="sub" data-field="last-run-sub"></span></dd>
+    </div>
+  </dl>
+</section>
+</div>
+
+<script>
+  import { pace, shortDate } from '../lib/format';
+
+  type Vitals = {
+    updated: string;
+    heartRate: { latest: number | null; at: string | null; resting: number | null; series: [number, number][] } | null;
+    lastSync: string | null;
+    day: { isToday: boolean; bodyBattery: number | null; steps: number | null; stepGoal: number | null } | null;
+    sleep: { score: number | null; seconds: number | null } | null;
+    vo2max: number | null;
+    running: {
+      weekKm: number;
+      lastRun: { date: string; distanceKm: number; durationSec: number; avgHr: number | null } | null;
+    } | null;
+  };
+
+  // The strip and the card share fields (e.g. heart rate), so `set` fills every match.
+  const section = document.querySelector<HTMLElement>('.vitals-root')!;
+  const field = (name: string) => section.querySelector<HTMLElement>(`[data-field="${name}"]`)!;
+  const set = (name: string, value: string | number | null | undefined) => {
+    if (value == null) return;
+    section.querySelectorAll(`[data-field="${name}"]`).forEach((el) => (el.textContent = String(value)));
+  };
+
+  const strip = section.querySelector<HTMLButtonElement>('.strip');
+  strip?.addEventListener('click', () => {
+    const open = strip.getAttribute('aria-expanded') !== 'true';
+    strip.setAttribute('aria-expanded', String(open));
+    section.querySelector<HTMLElement>('.vitals')!.hidden = !open;
+  });
+
+  const rtf = new Intl.RelativeTimeFormat('en-AU', { numeric: 'auto', style: 'short' });
+  function ago(iso: string): string {
+    const minutes = Math.round((Date.parse(iso) - Date.now()) / 60_000);
+    if (Math.abs(minutes) < 60) return rtf.format(minutes, 'minute');
+    if (Math.abs(minutes) < 48 * 60) return rtf.format(Math.round(minutes / 60), 'hour');
+    return rtf.format(Math.round(minutes / 1440), 'day');
+  }
+  const clock = (ms: number) =>
+    new Date(ms).toLocaleTimeString('en-AU', { hour: 'numeric', minute: '2-digit', timeZone: 'Australia/Melbourne' });
+  const hm = (seconds: number) => {
+    const minutes = Math.round(seconds / 60);
+    return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+  };
+
+  function drawChart(series: [number, number][]) {
+    const plot = section.querySelector<HTMLElement>('.plot')!;
+    const svg = plot.querySelector('svg')!;
+    const tooltip = plot.querySelector<HTMLElement>('.tooltip')!;
+    const crosshair = plot.querySelector<SVGLineElement>('.crosshair')!;
+    const bpms = series.map(([, bpm]) => bpm);
+    const [t0, t1] = [series[0][0], series[series.length - 1][0]];
+    const [lo, hi] = [Math.min(...bpms), Math.max(...bpms)];
+    const pad = Math.max(4, (hi - lo) * 0.1);
+    const [yMin, yMax] = [lo - pad, hi + pad];
+
+    // Plot in a fixed 1000×100 user space; the SVG stretches to fit and the
+    // line keeps a 2px stroke via vector-effect.
+    const x = (t: number) => ((t - t0) / (t1 - t0 || 1)) * 1000;
+    const y = (bpm: number) => 100 - ((bpm - yMin) / (yMax - yMin)) * 100;
+    svg.setAttribute('viewBox', '0 0 1000 100');
+    const points = series.map(([t, bpm]) => `${x(t).toFixed(1)},${y(bpm).toFixed(1)}`);
+    svg.querySelector('.line')!.setAttribute('d', `M${points.join('L')}`);
+    svg.querySelector('.area')!.setAttribute('d', `M0,100L${points.join('L')}L1000,100Z`);
+
+    section.querySelector('.y-max')!.textContent = String(hi);
+    section.querySelector('.y-min')!.textContent = String(lo);
+    plot.setAttribute('aria-label', `Heart rate over the last 24 hours, between ${lo} and ${hi} bpm.`);
+
+    let index = series.length - 1;
+    const show = (i: number) => {
+      index = Math.max(0, Math.min(series.length - 1, i));
+      const [t, bpm] = series[index];
+      const fraction = x(t) / 1000;
+      const px = fraction * svg.getBoundingClientRect().width;
+      crosshair.setAttribute('x1', String(x(t)));
+      crosshair.setAttribute('x2', String(x(t)));
+      crosshair.style.visibility = 'visible';
+      tooltip.hidden = false;
+      tooltip.innerHTML = `<strong>${bpm} bpm</strong> ${clock(t)}`;
+      tooltip.style.left = `${px}px`;
+      tooltip.style.translate = `${-fraction * 100}% 0`;
+    };
+    const hide = () => {
+      crosshair.style.visibility = 'hidden';
+      tooltip.hidden = true;
+    };
+    plot.addEventListener('pointermove', (event) => {
+      const rect = svg.getBoundingClientRect();
+      const t = t0 + ((event.clientX - rect.left) / rect.width) * (t1 - t0);
+      let nearest = 0;
+      for (let i = 1; i < series.length; i++) {
+        if (Math.abs(series[i][0] - t) < Math.abs(series[nearest][0] - t)) nearest = i;
+      }
+      show(nearest);
+    });
+    plot.addEventListener('pointerleave', hide);
+    plot.addEventListener('focus', () => show(index));
+    plot.addEventListener('blur', hide);
+    plot.addEventListener('keydown', (event) => {
+      const step = { ArrowLeft: -1, ArrowRight: 1 }[event.key];
+      if (step) {
+        event.preventDefault();
+        show(index + step);
+      }
+    });
+  }
+
+  function render(v: Vitals) {
+    const synced = v.lastSync ?? v.updated;
+    section.querySelector('[data-synced]')!.textContent = ago(synced);
+    section.querySelector('[data-synced]')!.setAttribute('datetime', synced);
+
+    const hr = v.heartRate;
+    if (hr?.latest) {
+      set('hr', hr.latest);
+      const beat = `${60 / hr.latest}s`;
+      section.querySelectorAll<SVGElement>('.heart').forEach((heart) => heart.style.setProperty('--beat', beat));
+    }
+    if (hr?.at) set('hr-at', ago(hr.at));
+    set('resting', hr?.resting);
+    if (hr && hr.series.length > 1) drawChart(hr.series);
+    else section.querySelector<HTMLElement>('.chart')!.hidden = true;
+
+    const battery = v.day?.bodyBattery;
+    set('battery', battery);
+    if (battery != null) field('battery-bar').style.width = `${battery}%`;
+    const steps = v.day?.steps;
+    if (v.day && !v.day.isToday) set('steps-label', 'Steps yesterday');
+    if (steps != null) {
+      set('steps', steps.toLocaleString('en-AU'));
+      if (v.day?.stepGoal) field('steps-bar').style.width = `${Math.min(100, (steps / v.day.stepGoal) * 100)}%`;
+    }
+
+    if (v.sleep?.seconds) set('sleep', hm(v.sleep.seconds));
+    if (v.sleep?.score) set('sleep-score', `Score ${v.sleep.score}`);
+
+    set('week', v.running?.weekKm);
+    if (v.vo2max) set('vo2', `VO₂ max ${Math.round(v.vo2max)}`);
+    const run = v.running?.lastRun;
+    if (run) {
+      set('last-run', `${run.distanceKm.toFixed(1)} km`);
+      set('last-run-sub', `${pace(run.durationSec, run.distanceKm)} · ${shortDate(run.date)}`);
+    }
+
+    section.hidden = false;
+  }
+
+  fetch(section.dataset.src!, { cache: 'no-cache' })
+    .then((response) => (response.ok ? response.json() : Promise.reject(response.status)))
+    .then(render)
+    .catch(() => {}); // No data, no card: the page reads fine without it.
+</script>
+
+<style>
+  .vitals-root {
+    margin-bottom: 4rem;
+  }
+  .strip {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.35rem 1.25rem;
+    width: 100%;
+    padding: 0.75rem 1rem;
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+    background: none;
+    color: var(--ink);
+    font: 0.8125rem/1.4 var(--font-mono);
+    font-variant-numeric: lining-nums;
+    text-align: left;
+    cursor: pointer;
+  }
+  .strip:hover {
+    border-color: var(--rule-strong);
+  }
+  .strip-hr {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .strip .heart {
+    width: 1rem;
+    height: 1rem;
+  }
+  .strip-extra {
+    color: var(--muted);
+  }
+  .strip-toggle {
+    margin-left: auto;
+    color: var(--muted);
+  }
+  .chevron {
+    display: inline-block;
+    margin-left: 0.35rem;
+    transition: rotate 0.2s;
+  }
+  .strip[aria-expanded='true'] {
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+  }
+  .strip[aria-expanded='true'] .chevron {
+    rotate: 180deg;
+  }
+  .strip[aria-expanded='true'] + .vitals {
+    border-top: 0;
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
+  }
+  @media (max-width: 30rem) {
+    .strip-battery {
+      display: none;
+    }
+  }
+  .vitals {
+    padding: 1.5rem;
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+    font-family: var(--font-mono);
+    font-variant-numeric: lining-nums;
+  }
+  .vitals-header {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 0.25rem 1rem;
+    margin-bottom: 1.5rem;
+  }
+  h2 {
+    margin: 0;
+    font-family: var(--font-serif);
+    font-size: 1.125rem;
+  }
+  .synced {
+    margin: 0;
+    font-size: 0.75rem;
+    color: var(--muted);
+  }
+
+  .hero {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    align-items: center;
+    column-gap: 0.75rem;
+  }
+  .heart {
+    grid-row: span 2;
+    width: 2.5rem;
+    height: 2.5rem;
+    fill: var(--accent);
+    animation: beat var(--beat, 1s) ease-out infinite;
+    transform-origin: center;
+  }
+  @keyframes beat {
+    0%, 40%, 100% { transform: scale(1); }
+    12% { transform: scale(1.18); }
+    24% { transform: scale(1.05); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .heart { animation: none; }
+  }
+  .hero-value {
+    margin: 0;
+    font-size: 3rem;
+    font-weight: 500;
+    line-height: 1;
+    letter-spacing: -0.03em;
+  }
+  .unit {
+    margin-left: 0.4rem;
+    font-size: 0.875rem;
+    letter-spacing: 0;
+    color: var(--muted);
+  }
+  .hero-caption {
+    margin: 0.35rem 0 0;
+    font-size: 0.75rem;
+    color: var(--muted);
+  }
+
+  .chart {
+    margin: 1.5rem 0 0;
+  }
+  .plot {
+    position: relative;
+    height: 6rem;
+    outline-offset: 4px;
+    touch-action: pan-y;
+  }
+  .chart-svg {
+    display: block;
+    width: calc(100% - 2.25rem);
+    height: 100%;
+    overflow: visible;
+  }
+  .line {
+    fill: none;
+    stroke: var(--accent);
+    stroke-width: 2;
+    stroke-linejoin: round;
+    vector-effect: non-scaling-stroke;
+  }
+  .area {
+    fill: color-mix(in srgb, var(--accent) 12%, transparent);
+  }
+  .crosshair {
+    stroke: var(--muted);
+    stroke-width: 1;
+    vector-effect: non-scaling-stroke;
+    visibility: hidden;
+  }
+  .y-label {
+    position: absolute;
+    right: 0;
+    font-size: 0.6875rem;
+    line-height: 1;
+    color: var(--muted);
+  }
+  .y-max { top: 0; }
+  .y-min { bottom: 0; }
+  .tooltip {
+    position: absolute;
+    bottom: calc(100% + 0.5rem);
+    padding: 0.25rem 0.5rem;
+    border: 1px solid var(--rule-strong);
+    border-radius: 4px;
+    background: var(--paper);
+    font-size: 0.75rem;
+    white-space: nowrap;
+    pointer-events: none;
+  }
+  .tooltip :global(strong) {
+    font-weight: 500;
+    margin-right: 0.25rem;
+  }
+  figcaption {
+    margin-top: 0.75rem;
+    font-size: 0.6875rem;
+    color: var(--muted);
+  }
+
+  .tiles {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1.25rem 1rem;
+    margin: 1.75rem 0 0;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--rule);
+  }
+  @media (max-width: 30rem) {
+    .tiles { grid-template-columns: repeat(2, 1fr); }
+  }
+  dt {
+    font-size: 0.6875rem;
+    color: var(--muted);
+  }
+  dd {
+    margin: 0.2rem 0 0;
+    font-size: 1.25rem;
+    font-weight: 500;
+    line-height: 1.2;
+  }
+  dd small {
+    font-size: 0.75rem;
+    font-weight: 400;
+    color: var(--muted);
+  }
+  .sub {
+    display: block;
+    margin-top: 0.2rem;
+    font-weight: 400;
+    font-size: 0.6875rem;
+    color: var(--muted);
+  }
+  .meter {
+    display: block;
+    height: 4px;
+    margin-top: 0.45rem;
+    border-radius: 2px;
+    background: color-mix(in srgb, var(--accent) 15%, transparent);
+    overflow: hidden;
+  }
+  .meter span {
+    display: block;
+    width: 0;
+    height: 100%;
+    border-radius: 2px;
+    background: var(--accent);
+  }
+</style>

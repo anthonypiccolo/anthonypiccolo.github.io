@@ -1,0 +1,70 @@
+---
+import { formatDate, type Post, readingMinutes } from '../lib/posts';
+import Base from './Base.astro';
+
+interface Props {
+  post: Post;
+}
+
+const { post } = Astro.props;
+const { title, date, category, description, image } = post.data;
+---
+
+<Base title={title} description={description} image={image} type="article">
+  <article class="post">
+    <header class="post-header">
+      <p class="meta">
+        <span>{category}</span>
+        <time datetime={date.toISOString()}>{formatDate(date)}</time>
+        <span>{readingMinutes(post)} min read</span>
+      </p>
+      <h1>{title}</h1>
+    </header>
+    {image && <img class="hero" src={image} alt="" />}
+    <div class="prose">
+      <slot />
+    </div>
+    <p class="back"><a href="/">← All writing</a></p>
+  </article>
+</Base>
+
+<style>
+  .post-header {
+    margin-bottom: 2.5rem;
+  }
+  .meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0 0.75rem;
+    margin: 0 0 1rem;
+    font-family: var(--font-mono);
+    font-size: 0.8125rem;
+    color: var(--muted);
+  }
+  .meta span:first-child {
+    color: var(--accent);
+  }
+  .meta > * + *::before {
+    content: '·';
+    margin-right: 0.75rem;
+    color: var(--rule-strong);
+  }
+  h1 {
+    margin: 0;
+    font-size: clamp(2rem, 1.4rem + 2.6vw, 3rem);
+    line-height: 1.1;
+    letter-spacing: -0.02em;
+    text-wrap: balance;
+  }
+  .hero {
+    display: block;
+    width: 100%;
+    margin-bottom: 2.5rem;
+    border-radius: 6px;
+  }
+  .back {
+    margin-top: 4rem;
+    font-family: var(--font-mono);
+    font-size: 0.8125rem;
+  }
+</style>

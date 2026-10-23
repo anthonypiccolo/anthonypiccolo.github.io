@@ -1,0 +1,243 @@
+:root {
+  --paper: #faf8f5;
+  --ink: #1c1b19;
+  --muted: #6e6a62;
+  --rule: #e6e1d8;
+  --rule-strong: #c9c2b5;
+  --accent: #c2410c;
+  --code-bg: #f1ede6;
+
+  --measure: 40rem;
+  --text-size: clamp(1.0625rem, 0.98rem + 0.35vw, 1.1875rem);
+
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #141311;
+    --ink: #e9e5dd;
+    --muted: #9a958b;
+    --rule: #2a2825;
+    --rule-strong: #4a463f;
+    --accent: #fb8a4e;
+    --code-bg: #1e1c1a;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-serif);
+  font-size: var(--text-size);
+  font-optical-sizing: auto;
+  line-height: 1.65;
+  font-kerning: normal;
+  font-variant-numeric: oldstyle-nums proportional-nums;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.wrap {
+  max-width: var(--measure);
+  margin-inline: auto;
+  padding-inline: 1.25rem;
+}
+
+a {
+  color: inherit;
+  text-decoration-line: underline;
+  text-decoration-color: var(--accent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.2em;
+}
+
+a:hover {
+  color: var(--accent);
+}
+
+::selection {
+  background: color-mix(in srgb, var(--accent) 25%, transparent);
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-weight: 650;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+}
+
+/* Long-form content: posts and the about page. */
+
+.prose > :first-child {
+  margin-top: 0;
+}
+
+.prose p,
+.prose li {
+  text-wrap: pretty;
+}
+
+/* Hyphenate only on narrow screens, where ragged lines get really ragged. */
+@media (max-width: 30rem) {
+  .prose p,
+  .prose li {
+    hyphens: auto;
+  }
+}
+
+.prose h2 {
+  margin: 2.75rem 0 0.75rem;
+  font-size: 1.5rem;
+}
+
+.prose h3 {
+  margin: 2.25rem 0 0.5rem;
+  font-size: 1.2rem;
+}
+
+.prose h4 {
+  margin: 2rem 0 0.5rem;
+  font-size: 1rem;
+}
+
+.prose ul,
+.prose ol {
+  padding-left: 1.25em;
+}
+
+.prose li + li {
+  margin-top: 0.35em;
+}
+
+.prose li::marker {
+  color: var(--muted);
+}
+
+.prose blockquote {
+  margin: 1.75rem 0;
+  padding-left: 1.25rem;
+  border-left: 2px solid var(--accent);
+  color: var(--muted);
+  font-style: italic;
+}
+
+.prose img,
+.prose svg,
+.prose video {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 2rem auto;
+  border-radius: 4px;
+}
+
+.prose figure {
+  max-width: 100%;
+  margin: 2rem 0;
+}
+
+.prose figure img {
+  margin: 0;
+}
+
+.prose figcaption {
+  margin-top: 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.prose hr {
+  margin: 3rem auto;
+  width: 4rem;
+  border: 0;
+  border-top: 1px solid var(--rule-strong);
+}
+
+.prose table {
+  width: 100%;
+  margin: 2rem 0;
+  border-collapse: collapse;
+  font-size: 0.9em;
+  font-variant-numeric: lining-nums tabular-nums;
+  display: block;
+  overflow-x: auto;
+}
+
+.prose th,
+.prose td {
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--rule);
+  text-align: left;
+}
+
+.prose th {
+  font-weight: 600;
+  border-bottom-color: var(--rule-strong);
+}
+
+code,
+kbd,
+pre {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  font-variant-numeric: normal;
+}
+
+:not(pre) > code {
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+  background: var(--code-bg);
+}
+
+.prose pre {
+  margin: 1.75rem 0;
+  padding: 1rem 1.25rem;
+  border-radius: 6px;
+  overflow-x: auto;
+  line-height: 1.55;
+  font-size: 0.8rem;
+}
+
+/* Shiki emits light + dark token colours; pick based on the OS setting. */
+.astro-code {
+  background-color: var(--code-bg) !important;
+}
+
+@media (prefers-color-scheme: dark) {
+  .astro-code,
+  .astro-code span {
+    color: var(--shiki-dark) !important;
+    font-style: var(--shiki-dark-font-style) !important;
+    font-weight: var(--shiki-dark-font-weight) !important;
+    text-decoration: var(--shiki-dark-text-decoration) !important;
+  }
+}
+
+/* Footnotes (GFM) */
+.prose .footnotes {
+  margin-top: 3rem;
+  font-size: 0.875em;
+  color: var(--muted);
+}
+
+/* Left over from the WordPress → Jekyll era. */
+.prose .center {
+  text-align: center;
+}

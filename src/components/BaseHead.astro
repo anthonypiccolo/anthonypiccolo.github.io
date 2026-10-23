@@ -1,0 +1,53 @@
+---
+import '../styles/global.css';
+import { Font } from 'astro:assets';
+import { GTM_ID, SITE_DESCRIPTION, SITE_TITLE } from '../consts';
+
+interface Props {
+  title?: string;
+  description?: string;
+  image?: string;
+  type?: 'website' | 'article';
+}
+
+const { title, description = SITE_DESCRIPTION, image = '/assets/anthonypiccolo_bio.jpg', type = 'website' } = Astro.props;
+const fullTitle = title ? `${title} — ${SITE_TITLE}` : SITE_TITLE;
+const canonicalURL = new URL(Astro.url.pathname, Astro.site);
+---
+
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<meta name="color-scheme" content="light dark" />
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<link rel="sitemap" href="/sitemap-index.xml" />
+<link rel="alternate" type="application/rss+xml" title={SITE_TITLE} href="/feed.xml" />
+<link rel="canonical" href={canonicalURL} />
+
+<Font cssVariable="--font-serif" preload />
+<Font cssVariable="--font-mono" />
+
+<title>{fullTitle}</title>
+<meta name="description" content={description} />
+<meta name="author" content="Anthony Piccolo" />
+
+<meta property="og:type" content={type} />
+<meta property="og:site_name" content={SITE_TITLE} />
+<meta property="og:url" content={canonicalURL} />
+<meta property="og:title" content={title ?? SITE_TITLE} />
+<meta property="og:description" content={description} />
+<meta property="og:image" content={new URL(image, Astro.site)} />
+<meta name="twitter:card" content="summary" />
+<meta name="twitter:site" content="@anthonypiccolo" />
+
+{import.meta.env.PROD && (
+  <script is:inline define:vars={{ id: GTM_ID }}>
+    (function (w, d, s, l, i) {
+      w[l] = w[l] || [];
+      w[l].push({ 'gtm.start': new Date().getTime(), event: 'gtm.js' });
+      var f = d.getElementsByTagName(s)[0], j = d.createElement(s);
+      j.async = true;
+      j.src = 'https://www.googletagmanager.com/gtm.js?id=' + i;
+      f.parentNode.insertBefore(j, f);
+    })(window, document, 'script', 'dataLayer', id);
+  </script>
+)}
